@@ -182,7 +182,7 @@ async function run() {
         if (ignore.length) files = files.filter(f => !isIgnored(f.filename, ignore));
         if (files.length > maxFiles) files = files.slice(0, maxFiles);
 
-        // Load YAML cfg (you already added loader); include:
+        // Load YAML cfg (we have already added loader); include:
         const redactEnabled = fileCfg?.redact_secrets !== false; // default true
         const userPatterns = Array.isArray(fileCfg?.redact_patterns) ? fileCfg.redact_patterns : [];
         const redactors = redactEnabled ? buildRedactors(userPatterns) : [];
