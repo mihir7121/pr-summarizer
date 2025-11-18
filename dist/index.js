@@ -24085,8 +24085,8 @@ var require_brace_expansion = __commonJS({
 });
 
 // src/index.js
-var core = __toESM(require_core(), 1);
-var github = __toESM(require_github(), 1);
+var core = __toESM(require_core());
+var github = __toESM(require_github());
 
 // node_modules/minimatch/dist/esm/index.js
 var import_brace_expansion = __toESM(require_brace_expansion(), 1);
