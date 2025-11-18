@@ -25510,6 +25510,33 @@ function coalesceConfig(inputs, fileCfg) {
     updateBody: updateBody != null ? Boolean(updateBody) : inputs.updateBody
   };
 }
+function buildRedactors(userPatterns = []) {
+  const defaults2 = [
+    /github_pat_[A-Za-z0-9_]{80,}/gi,
+    /ghp_[A-Za-z0-9]{30,}/gi,
+    /AKIA[0-9A-Z]{16}/g,
+    /aws(.{0,20})?(secret|access)?(.{0,20})?key.?[=:]\s*[A-Za-z0-9/+=]{40}/gi,
+    /xox[baprs]-[A-Za-z0-9-]{10,48}/g,
+    /eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}/g,
+    // JWT
+    /(api|token|secret|key|password|passwd)\s*[:=]\s*["']?[A-Za-z0-9_\-]{16,}["']?/gi,
+    /-----BEGIN (?:RSA|EC|DSA|OPENSSH|PGP) PRIVATE KEY-----[\s\S]*?-----END (?:RSA|EC|DSA|OPENSSH|PGP) PRIVATE KEY-----/g
+  ];
+  const extras = (userPatterns || []).map((p) => new RegExp(p, "g"));
+  return [...defaults2, ...extras];
+}
+function redactPatch(patch, redactors) {
+  if (!patch) return { redacted: patch, count: 0 };
+  let count = 0;
+  let out = patch;
+  for (const rx of redactors) {
+    out = out.replace(rx, () => {
+      count++;
+      return "[REDACTED_SECRET]";
+    });
+  }
+  return { redacted: out, count };
+}
 async function run() {
   try {
     if (!github.context.payload.pull_request) {
@@ -25549,6 +25576,17 @@ async function run() {
     let files = compare.data.files || [];
     if (ignore.length) files = files.filter((f) => !isIgnored(f.filename, ignore));
     if (files.length > maxFiles) files = files.slice(0, maxFiles);
+    const redactEnabled = fileCfg?.redact_secrets !== false;
+    const userPatterns = Array.isArray(fileCfg?.redact_patterns) ? fileCfg.redact_patterns : [];
+    const redactors = redactEnabled ? buildRedactors(userPatterns) : [];
+    let totalRedacted = 0;
+    for (const f of files) {
+      if (!f.patch || !redactEnabled) continue;
+      const { redacted, count } = redactPatch(f.patch, redactors);
+      f.patch = redacted;
+      totalRedacted += count;
+    }
+    core.info(`[pr-summarizer] redaction ${redactEnabled ? "on" : "off"}; matches=${totalRedacted}`);
     let added = 0, deleted = 0;
     for (const f of files) {
       const { add, del } = countPatch(f.patch);
