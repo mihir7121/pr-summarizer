@@ -20,18 +20,18 @@ When a PR is opened or updated, this Action:
 
 **Title**: feat(api): update handler.js, utils.go
 
-**Body**:
+**Description**: 
 
-### Summary
+Summary
 - Files changed: 5
 - Lines: +142 / -38
 
-### Highlights
+Highlights
 - M pkg/api/handler.go
 - A pkg/api/limiter.go
 - M utils/validation.go
 
-### Checklist
+Checklist
 - [ ] Tests added/updated
 - [ ] Docs updated
 - [ ] Breaking changes noted

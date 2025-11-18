@@ -392,7 +392,7 @@ var require_tunnel = __commonJS({
         connectOptions.headers = connectOptions.headers || {};
         connectOptions.headers["Proxy-Authorization"] = "Basic " + new Buffer(connectOptions.proxyAuth).toString("base64");
       }
-      debug2("making CONNECT request");
+      debug("making CONNECT request");
       var connectReq = self.request(connectOptions);
       connectReq.useChunkedEncodingByDefault = false;
       connectReq.once("response", onResponse);
@@ -412,7 +412,7 @@ var require_tunnel = __commonJS({
         connectReq.removeAllListeners();
         socket.removeAllListeners();
         if (res.statusCode !== 200) {
-          debug2(
+          debug(
             "tunneling socket could not be established, statusCode=%d",
             res.statusCode
           );
@@ -424,7 +424,7 @@ var require_tunnel = __commonJS({
           return;
         }
         if (head.length > 0) {
-          debug2("got illegal response body from proxy");
+          debug("got illegal response body from proxy");
           socket.destroy();
           var error = new Error("got illegal response body from proxy");
           error.code = "ECONNRESET";
@@ -432,13 +432,13 @@ var require_tunnel = __commonJS({
           self.removeSocket(placeholder);
           return;
         }
-        debug2("tunneling connection has established");
+        debug("tunneling connection has established");
         self.sockets[self.sockets.indexOf(placeholder)] = socket;
         return cb(socket);
       }
       function onError(cause) {
         connectReq.removeAllListeners();
-        debug2(
+        debug(
           "tunneling socket could not be established, cause=%s\n",
           cause.message,
           cause.stack
@@ -500,9 +500,9 @@ var require_tunnel = __commonJS({
       }
       return target;
     }
-    var debug2;
+    var debug;
     if (process.env.NODE_DEBUG && /\btunnel\b/.test(process.env.NODE_DEBUG)) {
-      debug2 = function() {
+      debug = function() {
         var args = Array.prototype.slice.call(arguments);
         if (typeof args[0] === "string") {
           args[0] = "TUNNEL: " + args[0];
@@ -512,10 +512,10 @@ var require_tunnel = __commonJS({
         console.error.apply(console, args);
       };
     } else {
-      debug2 = function() {
+      debug = function() {
       };
     }
-    exports2.debug = debug2;
+    exports2.debug = debug;
   }
 });
 
@@ -19726,10 +19726,10 @@ Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
       return process.env["RUNNER_DEBUG"] === "1";
     }
     exports2.isDebug = isDebug;
-    function debug2(message) {
+    function debug(message) {
       (0, command_1.issueCommand)("debug", {}, message);
     }
-    exports2.debug = debug2;
+    exports2.debug = debug;
     function error(message, properties = {}) {
       (0, command_1.issueCommand)("error", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
@@ -25419,9 +25419,6 @@ minimatch.escape = escape;
 minimatch.unescape = unescape;
 
 // src/index.js
-function debug(msg, obj) {
-  core.info(`[pr-summarizer] ${msg}${obj ? " " + JSON.stringify(obj) : ""}`);
-}
 function parseIgnores(ignoreCsv) {
   return ignoreCsv.split(",").map((s) => s.trim()).filter(Boolean).map((p) => new Minimatch(p, { dot: true }));
 }
@@ -25480,6 +25477,39 @@ function makeBody(files, added, deleted) {
   lines.push("- [ ] Linked issue(s)");
   return lines.join("\n");
 }
+async function loadRepoConfig(octokit, owner, repo, ref) {
+  try {
+    const res = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+      owner,
+      repo,
+      path: ".pr-summarizer.yml",
+      ref,
+      headers: { "X-GitHub-Api-Version": "2022-11-28" }
+    });
+    if (!res?.data?.content) return null;
+    const buff = Buffer.from(res.data.content, "base64").toString("utf8");
+    const cfg = yaml.load(buff) || {};
+    return cfg;
+  } catch (e) {
+    return null;
+  }
+}
+function coalesceConfig(inputs, fileCfg) {
+  const get = (obj, keys, fallback) => {
+    for (const k of keys) if (obj && obj[k] !== void 0) return obj[k];
+    return fallback;
+  };
+  const ignore = get(fileCfg, ["ignore"], null);
+  const maxFiles = get(fileCfg, ["max_files", "max-files"], null);
+  const updateTitle = get(fileCfg, ["update_title", "update-title"], null);
+  const updateBody = get(fileCfg, ["update_body", "update-body"], null);
+  return {
+    ignoreCsv: ignore ? Array.isArray(ignore) ? ignore.join(", ") : String(ignore) : inputs.ignoreCsv,
+    maxFiles: maxFiles ? parseInt(maxFiles, 10) : inputs.maxFiles,
+    updateTitle: updateTitle != null ? Boolean(updateTitle) : inputs.updateTitle,
+    updateBody: updateBody != null ? Boolean(updateBody) : inputs.updateBody
+  };
+}
 async function run() {
   try {
     if (!github.context.payload.pull_request) {
@@ -25488,20 +25518,27 @@ async function run() {
     }
     const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_PAT;
     if (!token) {
-      core.setFailed("Missing GITHUB_TOKEN in env (provided automatically by GitHub).");
+      core.setFailed("Missing GITHUB_TOKEN in env");
       return;
     }
-    const updateTitle = core.getBooleanInput("update-title");
-    const updateBody = core.getBooleanInput("update-body");
-    const maxFiles = parseInt(core.getInput("max-files") || "60", 10);
-    const ignoreCsv = core.getInput("ignore") || "";
-    const ignore = parseIgnores(ignoreCsv);
+    const inputUpdateTitle = core.getBooleanInput("update-title");
+    const inputUpdateBody = core.getBooleanInput("update-body");
+    const inputMaxFiles = parseInt(core.getInput("max-files") || "60", 10);
+    const inputIgnoreCsv = core.getInput("ignore") || "";
     const octokit = github.getOctokit(token);
     const pr = github.context.payload.pull_request;
     const { owner, repo } = github.context.repo;
+    const fileCfg = await loadRepoConfig(octokit, owner, repo, pr.head.sha);
+    const merged = coalesceConfig(
+      { ignoreCsv: inputIgnoreCsv, maxFiles: inputMaxFiles, updateTitle: inputUpdateTitle, updateBody: inputUpdateBody },
+      fileCfg || {}
+    );
+    const ignore = parseIgnores(merged.ignoreCsv);
+    const maxFiles = merged.maxFiles;
+    const updateTitle = merged.updateTitle;
+    const updateBody = merged.updateBody;
     const base = pr.base.sha;
     const head = pr.head.sha;
-    debug("Fetching compare", { base, head });
     const compare = await octokit.request("GET /repos/{owner}/{repo}/compare/{base}...{head}", {
       owner,
       repo,
@@ -25522,20 +25559,17 @@ async function run() {
     const body = makeBody(files, added, deleted);
     core.setOutput("title", title);
     core.setOutput("body", body);
-    const prNumber = pr.number;
     if (updateTitle || updateBody) {
-      debug("Updating PR", { number: prNumber });
       await octokit.request("PATCH /repos/{owner}/{repo}/pulls/{pull_number}", {
         owner,
         repo,
-        pull_number: prNumber,
+        pull_number: pr.number,
         title: updateTitle ? title : void 0,
         body: updateBody ? body : void 0,
         headers: { "X-GitHub-Api-Version": "2022-11-28" }
       });
     }
-    core.info(`Title: ${title}`);
-    core.info(`Body (first 120 chars): ${body.slice(0, 120)}...`);
+    core.info(`[pr-summarizer] config: ${JSON.stringify({ ...merged, ignoreCsv: merged.ignoreCsv })}`);
   } catch (err) {
     core.setFailed(err?.message || String(err));
   }
