@@ -1,40 +1,31 @@
-name: 'PR Summarizer (Minimal)'
-description: 'Heuristic PR title+body from diff; optional LLM later.'
-author: 'you'
-runs:
-using: 'node20'
-name: 'PR Summarizer (Minimal)'
-description: 'Heuristic PR title+body from diff; optional LLM later.'
-author: 'you'
-
-runs:
-  using: 'node20'
-  main: 'dist/index.js'
+name: PR Summarizer (Minimal)
+description: Heuristic PR title+body from diff; optional LLM later.
+author: you
 
 inputs:
   update-title:
-    description: 'Whether to update PR title'
+    description: Whether to update PR title
     required: false
-    default: 'true'
+    default: "true"
   update-body:
-    description: 'Whether to update PR body'
+    description: Whether to update PR body
     required: false
-    default: 'true'
+    default: "true"
   max-files:
-    description: 'Max files to consider'
+    description: Max files to consider
     required: false
-    default: '60'
+    default: "60"
   ignore:
-    description: 'Comma-separated ignore globs'
+    description: Comma-separated ignore globs
     required: false
-    default: 'package-lock.json, yarn.lock, pnpm-lock.yaml, dist/**, build/**, **/*.snap'
+    default: "package-lock.json, yarn.lock, pnpm-lock.yaml, dist/**, build/**, **/*.snap"
 
 outputs:
   title:
-    description: 'Generated PR title'
+    description: Generated PR title
   body:
-    description: 'Generated PR body'
+    description: Generated PR body
 
-permissions:
-  contents: read
-  pull-requests: write
+runs:
+  using: node20
+  main: dist/index.js
