@@ -166,6 +166,52 @@ The LLM reads the actual diff content and understands the semantics of the chang
 
 ---
 
+## Contributing
+
+Contributions are welcome! Please follow this workflow:
+
+### Branching
+
+- `main` is protected — no direct pushes. All changes go through a PR.
+- Branch naming: `feat/<short-description>`, `fix/<short-description>`, `docs/<short-description>`
+
+### Making a Change
+
+1. Fork or clone the repo
+2. Create a branch off `main`:
+   ```bash
+   git checkout -b feat/my-change
+   ```
+3. Make your changes in `src/index.js` and/or `action.yml`
+4. Rebuild the bundle before committing — the `dist/` output is what GitHub Actions executes:
+   ```bash
+   npm run build
+   ```
+5. Commit both `src/index.js` and `dist/index.js` together
+6. Push and open a PR against `main`
+
+### Releasing
+
+Releases are tagged manually. After merging to `main`:
+
+```bash
+git tag v1.x.y
+git push origin v1.x.y
+```
+
+Then create a GitHub Release from the tag so users see the changelog.
+
+### Commit Style
+
+Follow [Conventional Commits](https://www.conventionalcommits.org/):
+- `feat:` new feature
+- `fix:` bug fix
+- `docs:` documentation only
+- `refactor:` code change with no behavior change
+- `chore:` build, dependencies, tooling
+
+---
+
 ## Action Tech Stack
 
 - Node 20 runtime (`runs.using: node20`)
