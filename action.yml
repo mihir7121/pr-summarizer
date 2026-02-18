@@ -1,5 +1,5 @@
-name: PR Summarizer (Minimal)
-description: Heuristic PR title+body from diff; optional LLM later.
+name: PR Summarizer
+description: LLM-powered PR title+body from diff; falls back to heuristic if LLM unavailable.
 author: you
 
 inputs:
@@ -19,7 +19,47 @@ inputs:
     description: Comma-separated ignore globs
     required: false
     default: "package-lock.json, yarn.lock, pnpm-lock.yaml, dist/**, build/**, **/*.snap"
-
+  use-llm:
+    description: Use LLM to generate title/body (fallback to heuristic on failure)
+    required: false
+    default: "true"
+  llm-provider:
+    description: openai | azure_openai | anthropic
+    required: false
+    default: "openai"
+  llm-model:
+    description: Model/deployment name (e.g., gpt-4o-mini or azure deployment id)
+    required: false
+    default: "gpt-4o-mini"
+  llm-temperature:
+    description: Sampling temperature
+    required: false
+    default: "0.2"
+  llm-timeout-ms:
+    description: Request timeout in ms
+    required: false
+    default: "20000"
+  llm-max-files:
+    description: Max files to send to LLM (cap cost)
+    required: false
+    default: "30"
+  azure-endpoint:
+    description: For provider=azure_openai (https://YOUR-RESOURCE.openai.azure.com)
+    required: false
+    default: ""
+  azure-api-version:
+    description: For provider=azure_openai (e.g., 2024-06-01)
+    required: false
+    default: "2024-06-01"
+  anthropic-model:
+    description: For provider=anthropic (e.g., claude-3-5-haiku-20241022, claude-opus-4-5)
+    required: false
+    default: "claude-3-5-haiku-20241022"
+  anthropic-api-version:
+    description: Anthropic API version header
+    required: false
+    default: "2023-06-01"
+    
 outputs:
   title:
     description: Generated PR title

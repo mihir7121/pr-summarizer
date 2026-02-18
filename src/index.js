@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
 import { Minimatch } from 'minimatch';
+import yaml from 'js-yaml';
 
 
 function debug(msg, obj) {
@@ -141,6 +142,165 @@ function redactPatch(patch, redactors) {
     return { redacted: out, count };
 }
 
+function trimStr(s, max) { return s.length > max ? s.slice(0, max) : s; }
+
+function buildLLMInput(files, maxFiles, added, deleted) {
+    const top = files.slice(0, maxFiles);
+    const omitted = files.length - top.length;
+    const header = [
+        `Total files changed: ${files.length}${omitted > 0 ? ` (showing top ${top.length})` : ''}`,
+        `Lines added: +${added}  Lines deleted: -${deleted}`,
+        '',
+        'Files and diffs:'
+    ].join('\n');
+
+    const blocks = top.map((f, i) => {
+        const patch = trimStr(f.patch || '(binary or no diff)', 3000);
+        const ext = f.filename.split('.').pop() || '';
+        return `[${i + 1}] ${f.status.toUpperCase()} ${f.filename}${ext ? ` (.${ext})` : ''}\n${patch}`;
+    });
+
+    return header + '\n\n' + blocks.join('\n\n');
+}
+
+function parseLLMJson(text) {
+    try { return JSON.parse(text); } catch {
+        // try to extract JSON block if model added prose
+        const m = text.match(/\{[\s\S]*\}/);
+        if (!m) throw new Error('invalid JSON from LLM');
+        return JSON.parse(m[0]);
+    }
+}
+
+const LLM_SYSTEM_PROMPT = `You are an expert software engineer writing a pull request summary.
+Given a git diff with file changes, write a clear, developer-friendly PR title and description.
+
+Rules:
+- Title: follow Conventional Commits (feat/fix/docs/refactor/test/chore/perf), ≤ 72 chars, no trailing period
+- Description: use Markdown, structured with ## Summary, ## Changes, and ## Notes sections
+  - Summary: 2-4 sentences explaining WHAT changed and WHY (the intent, not just the mechanics)
+  - Changes: bullet list of the key logical changes grouped by concern (not just file-by-file)
+  - Notes: any breaking changes, migration steps, or reviewer hints (omit section if none)
+- Focus on the purpose and impact of the change, not just listing what files were touched
+- If test files changed, mention what is now tested
+- If configuration/dependency files changed, call that out explicitly
+
+Output strict JSON only — no prose outside the JSON object:
+{"title": "...", "description": "..."}`;
+
+async function summarizeWithOpenAI({ key, model, temperature, timeoutMs, content }) {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+            body: JSON.stringify({
+                model,
+                temperature,
+                messages: [
+                    { role: 'system', content: LLM_SYSTEM_PROMPT },
+                    { role: 'user', content }
+                ]
+            }),
+            signal: ac.signal
+        });
+        if (!res.ok) throw new Error(`OpenAI ${res.status}`);
+        const json = await res.json();
+        const msg = json?.choices?.[0]?.message?.content || '{}';
+        return parseLLMJson(msg);
+    } finally { clearTimeout(t); }
+}
+
+async function summarizeWithAzureOpenAI({ key, endpoint, apiVersion, deployment, temperature, timeoutMs, content }) {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+        const url = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'api-key': key },
+            body: JSON.stringify({
+                temperature,
+                messages: [
+                    { role: 'system', content: LLM_SYSTEM_PROMPT },
+                    { role: 'user', content }
+                ]
+            }),
+            signal: ac.signal
+        });
+        if (!res.ok) throw new Error(`AzureOpenAI ${res.status}`);
+        const json = await res.json();
+        const msg = json?.choices?.[0]?.message?.content || '{}';
+        return parseLLMJson(msg);
+    } finally { clearTimeout(t); }
+}
+
+async function summarizeWithAnthropic({ key, model, apiVersion, temperature, timeoutMs, content }) {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': key,
+                'anthropic-version': apiVersion
+            },
+            body: JSON.stringify({
+                model,
+                max_tokens: 1024,
+                temperature,
+                system: LLM_SYSTEM_PROMPT,
+                messages: [{ role: 'user', content }]
+            }),
+            signal: ac.signal
+        });
+        if (!res.ok) throw new Error(`Anthropic ${res.status}`);
+        const json = await res.json();
+        const msg = json?.content?.[0]?.text || '{}';
+        return parseLLMJson(msg);
+    } finally { clearTimeout(t); }
+}
+
+async function maybeSummarizeWithLLM(opts) {
+    const {
+        useLLM, provider, model, temperature, timeoutMs,
+        files, repoName, branchName, prTitle, maxFiles,
+        added, deleted,
+        key, azureEndpoint, azureApiVersion,
+        anthropicModel, anthropicApiVersion
+    } = opts;
+
+    if (!useLLM) return null;
+    if (!key) throw new Error('LLM enabled but missing LLM_API_KEY / OPENAI_API_KEY / AZURE_OPENAI_API_KEY / ANTHROPIC_API_KEY');
+
+    const content = [
+        `Repo: ${repoName}`,
+        `Branch: ${branchName}`,
+        prTitle ? `Existing PR title (may be auto-generated, use as weak hint only): ${prTitle}` : '',
+        '',
+        buildLLMInput(files, maxFiles, added, deleted)
+    ].filter(Boolean).join('\n');
+
+    if (provider === 'openai') {
+        return summarizeWithOpenAI({ key, model, temperature, timeoutMs, content });
+    } else if (provider === 'azure_openai') {
+        if (!azureEndpoint) throw new Error('azure-endpoint required for azure_openai provider');
+        return summarizeWithAzureOpenAI({
+            key, endpoint: azureEndpoint, apiVersion: azureApiVersion, deployment: model,
+            temperature, timeoutMs, content
+        });
+    } else if (provider === 'anthropic') {
+        return summarizeWithAnthropic({
+            key, model: anthropicModel, apiVersion: anthropicApiVersion,
+            temperature, timeoutMs, content
+        });
+    } else {
+        throw new Error(`Unsupported provider: ${provider}. Use openai, azure_openai, or anthropic.`);
+    }
+}
+
 // Main
 async function run() {
     try {
@@ -202,8 +362,49 @@ async function run() {
             added += add; deleted += del;
         }
 
-        const title = makeTitle(files);
-        const body = makeBody(files, added, deleted);
+        const repoName = `${owner}/${repo}`;
+        const branchName = pr.head.ref;
+        const existingPrTitle = pr.title || '';
+
+        const heuristicTitle = makeTitle(files);
+        const heuristicBody = makeBody(files, added, deleted);
+
+        let title = heuristicTitle;
+        let body = heuristicBody;
+
+        const useLLM = core.getBooleanInput('use-llm');
+        const provider = core.getInput('llm-provider') || 'openai';
+        const model = core.getInput('llm-model') || 'gpt-4o-mini';
+        const temperature = parseFloat(core.getInput('llm-temperature') || '0.2');
+        const timeoutMs = parseInt(core.getInput('llm-timeout-ms') || '20000', 10);
+        const llmMaxFiles = parseInt(core.getInput('llm-max-files') || '30', 10);
+        const azureEndpoint = core.getInput('azure-endpoint') || process.env.AZURE_OPENAI_ENDPOINT || '';
+        const azureApiVersion = core.getInput('azure-api-version') || process.env.AZURE_OPENAI_API_VERSION || '2024-06-01';
+        const anthropicModel = core.getInput('anthropic-model') || 'claude-3-5-haiku-20241022';
+        const anthropicApiVersion = core.getInput('anthropic-api-version') || '2023-06-01';
+        const llmKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY
+            || process.env.AZURE_OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY;
+
+        if (useLLM) {
+            try {
+                const out = await maybeSummarizeWithLLM({
+                    useLLM, provider, model, temperature, timeoutMs,
+                    files, repoName, branchName, prTitle: existingPrTitle,
+                    maxFiles: llmMaxFiles, added, deleted,
+                    key: llmKey, azureEndpoint, azureApiVersion,
+                    anthropicModel, anthropicApiVersion
+                });
+                if (out && out.title && out.description) {
+                    title = trimStr(out.title, 72);
+                    body = out.description;
+                    core.info('[pr-summarizer] LLM: success');
+                } else {
+                    core.info('[pr-summarizer] LLM returned empty/invalid, using heuristic');
+                }
+            } catch (e) {
+                core.info(`[pr-summarizer] LLM error (${provider}): ${e.message}; using heuristic`);
+            }
+        }
 
         core.setOutput('title', title);
         core.setOutput('body', body);
