@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: mihir7121/pr-summarizer@v1.3.1
+      - uses: mihir7121/pr-summarizer@v1.3.1 #Update this tag @1.3.1 to the latest to get the newest updates
         with:
           use-llm: "false"
         env:
