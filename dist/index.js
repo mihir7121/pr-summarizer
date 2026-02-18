@@ -28275,7 +28275,10 @@ async function summarizeWithAnthropic({ key, model, apiVersion, temperature, tim
       }),
       signal: ac.signal
     });
-    if (!res.ok) throw new Error(`Anthropic ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`Anthropic ${res.status}: ${errText}`);
+    }
     const json2 = await res.json();
     const msg = json2?.content?.[0]?.text || "{}";
     return parseLLMJson(msg);
